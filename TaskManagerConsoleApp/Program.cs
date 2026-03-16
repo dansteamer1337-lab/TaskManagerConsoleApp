@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using Serilog;
 
 namespace TaskManagerConsoleApp
 {
@@ -22,6 +23,8 @@ namespace TaskManagerConsoleApp
 
     class Program
     {
+
+
         private static List<TaskItem> tasks = new List<TaskItem>();
         private static int nextId = 1;
         private static readonly string logFilePath = "app_log.txt";
@@ -29,9 +32,18 @@ namespace TaskManagerConsoleApp
 
         static void Main(string[] args)
         {
+
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Debug()                               // уровень логирования: Debug и выше
+                .WriteTo.Console()                                  // пишем логи в консоль
+                .WriteTo.File("logs\\myapp-.log",                   // пишем логи в файлы
+                    rollingInterval: RollingInterval.Day,           // ежедневная ротация
+                    outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+                .CreateLogger();
+
             SetupTracing();
 
-            Trace.TraceInformation("Приложение запущено.");
+            Log.Debug("Приложение запущено.");
             LogInfo("Приложение запущено.");
 
             bool exit = false;
@@ -39,7 +51,7 @@ namespace TaskManagerConsoleApp
             {
                 PrintMenu();
                 string input = Console.ReadLine();
-                Trace.TraceInformation($"Пользователь ввел команду: {input}");
+                Log.Information($"Пользователь ввел команду: {input}");
 
                 switch (input)
                 {
@@ -57,18 +69,20 @@ namespace TaskManagerConsoleApp
                         break;
                     case "5":
                         exit = true;
-                        Trace.TraceInformation("Пользователь завершил работу приложения.");
+                        Log.Information("Пользователь завершил работу приложения.");
                         LogInfo("Приложение завершено.");
                         Console.WriteLine("До свидания!");
                         break;
                     default:
                         Console.WriteLine("Неверная команда. Попробуйте снова.");
-                        Trace.TraceWarning($"Введена неверная команда: {input}");
+                        Log.Warning($"Введена неверная команда: {input}");
                         break;
                 }
             }
 
             Trace.Close();
+
+            Log.CloseAndFlush();
         }
 
         static void SetupTracing()
@@ -97,7 +111,7 @@ namespace TaskManagerConsoleApp
                 logMessage += $" | Exception: {ex.Message}";
 
             File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
-            Trace.TraceError(message);
+            Log.Error(message);
         }
 
         static void PrintMenu()
@@ -119,12 +133,12 @@ namespace TaskManagerConsoleApp
             if (string.IsNullOrWhiteSpace(description))
             {
                 Console.WriteLine("Описание не может быть пустым.");
-                Trace.TraceWarning("Попытка создать задачу с пустым описанием.");
+                Log.Warning("Попытка создать задачу с пустым описанием.");
                 LogError("Попытка создать задачу с пустым описанием.");
                 return;
             }
 
-            Trace.TraceInformation($"Начало создания задачи с описанием: {description}");
+            Log.Information($"Начало создания задачи с описанием: {description}");
 
             var newTask = new TaskItem
             {
@@ -136,7 +150,7 @@ namespace TaskManagerConsoleApp
 
             tasks.Add(newTask);
 
-            Trace.TraceInformation($"Задача успешно создана с ID: {newTask.Id}");
+            Log.Information($"Задача успешно создана с ID: {newTask.Id}");
             LogInfo($"Создана задача: ID={newTask.Id}, Описание={description}");
 
             Console.WriteLine($"Задача '{description}' успешно добавлена (ID: {newTask.Id})!");
@@ -156,12 +170,12 @@ namespace TaskManagerConsoleApp
             if (!int.TryParse(Console.ReadLine(), out int id))
             {
                 Console.WriteLine("Некорректный ID.");
-                Trace.TraceWarning("Введен некорректный ID для удаления.");
+                Log.Warning("Введен некорректный ID для удаления.");
                 LogError("Некорректный ID при попытке удаления.");
                 return;
             }
 
-            Trace.TraceInformation($"Попытка удалить задачу с ID: {id}");
+            Log.Information($"Попытка удалить задачу с ID: {id}");
 
             var taskToDelete = tasks.FirstOrDefault(t => t.Id == id);
             if (taskToDelete != null)
@@ -169,13 +183,13 @@ namespace TaskManagerConsoleApp
                 tasks.Remove(taskToDelete);
                 Console.WriteLine($"Задача '{taskToDelete.Description}' удалена.");
 
-                Trace.TraceInformation($"Задача с ID {id} успешно удалена.");
+                Log.Information($"Задача с ID {id} успешно удалена.");
                 LogInfo($"Удалена задача: ID={id}, Описание={taskToDelete.Description}");
             }
             else
             {
                 Console.WriteLine($"Задача с ID {id} не найдена.");
-                Trace.TraceWarning($"Задача с ID {id} не найдена для удаления.");
+                Log.Warning($"Задача с ID {id} не найдена для удаления.");
                 LogError($"Попытка удалить несуществующую задачу с ID {id}");
             }
         }
@@ -187,7 +201,7 @@ namespace TaskManagerConsoleApp
             if (tasks.Count == 0)
             {
                 Console.WriteLine("Задач пока нет.");
-                Trace.TraceInformation("Просмотр списка задач: список пуст.");
+                Log.Information("Просмотр списка задач: список пуст.");
                 LogInfo("Просмотр пустого списка задач.");
                 return;
             }
@@ -197,7 +211,7 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine(task.ToString());
             }
 
-            Trace.TraceInformation($"Просмотр списка задач. Всего задач: {tasks.Count}");
+            Log.Information($"Просмотр списка задач. Всего задач: {tasks.Count}");
             LogInfo($"Просмотр списка задач. Всего: {tasks.Count}");
         }
 
@@ -220,7 +234,7 @@ namespace TaskManagerConsoleApp
                 return;
             }
 
-            Trace.TraceInformation($"Попытка отметить задачу с ID {id} как выполненную.");
+            Log.Information($"Попытка отметить задачу с ID {id} как выполненную.");
 
             var task = tasks.FirstOrDefault(t => t.Id == id);
             if (task != null)
@@ -230,19 +244,19 @@ namespace TaskManagerConsoleApp
                     task.IsCompleted = true;
                     Console.WriteLine($"Задача '{task.Description}' отмечена как выполненная!");
 
-                    Trace.TraceInformation($"Задача с ID {id} отмечена как выполненная.");
+                    Log.Information($"Задача с ID {id} отмечена как выполненная.");
                     LogInfo($"Задача выполнена: ID={id}, Описание={task.Description}");
                 }
                 else
                 {
                     Console.WriteLine("Эта задача уже была выполнена ранее.");
-                    Trace.TraceWarning($"Попытка повторно отметить задачу ID {id} как выполненную.");
+                    Log.Warning($"Попытка повторно отметить задачу ID {id} как выполненную.");
                 }
             }
             else
             {
                 Console.WriteLine($"Задача с ID {id} не найдена.");
-                Trace.TraceWarning($"Задача с ID {id} не найдена для отметки.");
+                Log.Warning($"Задача с ID {id} не найдена для отметки.");
                 LogError($"Попытка отметить несуществующую задачу с ID {id}");
             }
         }

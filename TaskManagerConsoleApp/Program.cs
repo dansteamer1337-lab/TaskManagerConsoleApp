@@ -115,7 +115,7 @@ namespace TaskManagerConsoleApp
         static void PrintMenu()
         {
             Console.WriteLine("\n--- Менеджер задач ---");
-            Console.WriteLine("1. Создать задачу");//asd
+            Console.WriteLine("1. Создать задачу");//asdasd
             Console.WriteLine("2. Удалить задачу");
             Console.WriteLine("3. Показать все задачи");
             Console.WriteLine("4. Отметить задачу как выполненную");

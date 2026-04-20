@@ -23,8 +23,6 @@ namespace TaskManagerConsoleApp
 
     class Program
     {
-
-
         private static List<TaskItem> tasks = new List<TaskItem>();
         private static int nextId = 1;
         private static readonly string logFilePath = "app_log.txt";
@@ -32,12 +30,11 @@ namespace TaskManagerConsoleApp
 
         static void Main(string[] args)
         {
-
             Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()                               // уровень логирования: Debug и выше
-                .WriteTo.Console()                                  // пишем логи в консоль
-                .WriteTo.File("logs\\myapp-.log",                   // пишем логи в файлы
-                    rollingInterval: RollingInterval.Day,           // ежедневная ротация
+                .MinimumLevel.Debug()
+                .WriteTo.Console()
+                .WriteTo.File("logs\\myapp-.log",
+                    rollingInterval: RollingInterval.Day,
                     outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
                 .CreateLogger();
 
@@ -81,14 +78,12 @@ namespace TaskManagerConsoleApp
             }
 
             Trace.Close();
-
             Log.CloseAndFlush();
         }
 
         static void SetupTracing()
         {
             Trace.Listeners.Clear();
-
             Trace.Listeners.Add(new ConsoleTraceListener());
 
             TextWriterTraceListener fileListener = new TextWriterTraceListener(traceFilePath);
@@ -97,7 +92,10 @@ namespace TaskManagerConsoleApp
             Trace.AutoFlush = true;
 
             Trace.WriteLine("=== Новая сессия трассировки ===");
+            Trace.WriteLine($"Начало работы: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+            Trace.WriteLine(new string('=', 80));
         }
+
         static void LogInfo(string message)
         {
             string logMessage = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] {message}";
@@ -127,6 +125,11 @@ namespace TaskManagerConsoleApp
 
         static void CreateTask()
         {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            Log.Information("Start Create Task");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] НАЧАЛО CreateTask");
+
             Console.Write("Введите описание задачи: ");
             string description = Console.ReadLine();
 
@@ -135,6 +138,10 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine("Описание не может быть пустым.");
                 Log.Warning("Попытка создать задачу с пустым описанием.");
                 LogError("Попытка создать задачу с пустым описанием.");
+
+                stopwatch.Stop();
+                Log.Information($"Close Create Task | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Пустое описание");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ CreateTask | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -154,15 +161,28 @@ namespace TaskManagerConsoleApp
             LogInfo($"Создана задача: ID={newTask.Id}, Описание={description}");
 
             Console.WriteLine($"Задача '{description}' успешно добавлена (ID: {newTask.Id})!");
+
+            stopwatch.Stop();
+            Log.Information($"Close Create Task | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ID задачи: {newTask.Id}");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ CreateTask | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
         }
 
         static void DeleteTask()
         {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            Log.Information("Start Delete Task");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] НАЧАЛО DeleteTask");
+
             ViewTasks();
 
             if (tasks.Count == 0)
             {
                 Console.WriteLine("Нет задач для удаления.");
+
+                stopwatch.Stop();
+                Log.Information($"Close Delete Task | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Нет задач для удаления");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ DeleteTask | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -172,6 +192,10 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine("Некорректный ID.");
                 Log.Warning("Введен некорректный ID для удаления.");
                 LogError("Некорректный ID при попытке удаления.");
+
+                stopwatch.Stop();
+                Log.Information($"Close Delete Task | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Некорректный ID");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ DeleteTask | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -185,17 +209,30 @@ namespace TaskManagerConsoleApp
 
                 Log.Information($"Задача с ID {id} успешно удалена.");
                 LogInfo($"Удалена задача: ID={id}, Описание={taskToDelete.Description}");
+
+                stopwatch.Stop();
+                Log.Information($"Close Delete Task | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | Удален ID: {id}");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ DeleteTask | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
             }
             else
             {
                 Console.WriteLine($"Задача с ID {id} не найдена.");
                 Log.Warning($"Задача с ID {id} не найдена для удаления.");
                 LogError($"Попытка удалить несуществующую задачу с ID {id}");
+
+                stopwatch.Stop();
+                Log.Information($"Close Delete Task | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Задача с ID {id} не найдена");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ DeleteTask | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
             }
         }
 
         static void ViewTasks()
         {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            Log.Information("Start View Task");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] НАЧАЛО ViewTasks");
+
             Console.WriteLine("\n--- Список задач ---");
 
             if (tasks.Count == 0)
@@ -203,6 +240,10 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine("Задач пока нет.");
                 Log.Information("Просмотр списка задач: список пуст.");
                 LogInfo("Просмотр пустого списка задач.");
+
+                stopwatch.Stop();
+                Log.Information($"Close View Task | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Список задач пуст");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ ViewTasks | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -213,15 +254,28 @@ namespace TaskManagerConsoleApp
 
             Log.Information($"Просмотр списка задач. Всего задач: {tasks.Count}");
             LogInfo($"Просмотр списка задач. Всего: {tasks.Count}");
+
+            stopwatch.Stop();
+            Log.Information($"Close View Task | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | Всего задач: {tasks.Count}");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ ViewTasks | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
         }
 
         static void MarkTaskAsCompleted()
         {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            Log.Information("Start Mark Task As Completed Task");
+            Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] НАЧАЛО MarkTaskAsCompleted");
+
             ViewTasks();
 
             if (tasks.Count == 0)
             {
                 Console.WriteLine("Нет задач для отметки.");
+
+                stopwatch.Stop();
+                Log.Information($"Close Mark Task As Completed Task | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Нет задач для отметки");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ MarkTaskAsCompleted | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -231,6 +285,10 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine("Некорректный ID.");
                 Trace.TraceWarning("Введен некорректный ID для отметки задачи.");
                 LogError("Некорректный ID при отметке задачи как выполненной.");
+
+                stopwatch.Stop();
+                Log.Information($"Close Mark Task As Completed Task | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Некорректный ID");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ MarkTaskAsCompleted | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 return;
             }
 
@@ -246,11 +304,19 @@ namespace TaskManagerConsoleApp
 
                     Log.Information($"Задача с ID {id} отмечена как выполненная.");
                     LogInfo($"Задача выполнена: ID={id}, Описание={task.Description}");
+
+                    stopwatch.Stop();
+                    Log.Information($"Close Mark Task As Completed Task | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | Отмечен ID: {id}");
+                    Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ MarkTaskAsCompleted | СТАТУС: Success | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 }
                 else
                 {
                     Console.WriteLine("Эта задача уже была выполнена ранее.");
                     Log.Warning($"Попытка повторно отметить задачу ID {id} как выполненную.");
+
+                    stopwatch.Stop();
+                    Log.Information($"Close Mark Task As Completed Task | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Задача ID {id} уже выполнена");
+                    Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ MarkTaskAsCompleted | СТАТУС: Warning | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
                 }
             }
             else
@@ -258,6 +324,10 @@ namespace TaskManagerConsoleApp
                 Console.WriteLine($"Задача с ID {id} не найдена.");
                 Log.Warning($"Задача с ID {id} не найдена для отметки.");
                 LogError($"Попытка отметить несуществующую задачу с ID {id}");
+
+                stopwatch.Stop();
+                Log.Information($"Close Mark Task As Completed Task | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ПРИЧИНА: Задача с ID {id} не найдена");
+                Trace.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] КОНЕЦ MarkTaskAsCompleted | СТАТУС: Error | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
             }
         }
     }

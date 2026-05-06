@@ -4,49 +4,290 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace TaskManagerConsoleApp
 {
-    // Перечисление уровней ошибок
-    public enum ErrorLevel
+
+    public enum TaskPriority
     {
-        Info,
-        Warning,
-        Error,
-        Fatal,
-        Debug
+        Low = 0,
+        Medium = 1,
+        High = 2,
+        Critical = 3
     }
 
-    // Класс для хранения информации об ошибке
-    public class ErrorContext
+    public class TaskItem
     {
-        public string Message { get; set; }
-        public string StackTrace { get; set; }
-        public string Operation { get; set; }
-        public ErrorLevel Level { get; set; }
-        public DateTime Timestamp { get; set; }
-        public Exception Exception { get; set; }
-        public Dictionary<string, object> AdditionalData { get; set; }
+        public int Id { get; set; }
+        public string Title { get; set; }
+        public string Description { get; set; }
+        public TaskPriority Priority { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public bool IsCompleted { get; set; }
 
-        public ErrorContext()
+        public override string ToString()
         {
-            Timestamp = DateTime.Now;
-            AdditionalData = new Dictionary<string, object>();
+            string status = IsCompleted ? "[✓]" : "[ ]";
+            string prioritySymbol = Priority switch
+            {
+                TaskPriority.Low => "↓",
+                TaskPriority.Medium => "●",
+                TaskPriority.High => "↑",
+                TaskPriority.Critical => "!!!",
+                _ => "?"
+            };
+
+            return $"{Id}. {status} [{prioritySymbol}] {Title} - {Description} (Создано: {CreatedAt:dd.MM.yyyy HH:mm})";
         }
     }
 
-    // Централизованный обработчик ошибок
+
+    public static class LoggerManager
+    {
+        public static ILogger Logger { get; private set; }
+        private static Logger _serilogLogger;
+
+        static LoggerManager()
+        {
+            ConfigureLogger();
+        }
+
+        private static void ConfigureLogger()
+        {
+            if (!Directory.Exists("logs"))
+                Directory.CreateDirectory("logs");
+
+            _serilogLogger = new LoggerConfiguration()
+                .MinimumLevel.Debug()
+                .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+                .WriteTo.File("logs/taskmanager-.log",
+                    rollingInterval: RollingInterval.Day,
+                    outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                .CreateLogger();
+
+            Logger = _serilogLogger;
+        }
+
+        public static void LogTaskOperation(string operation, TaskItem task, string result)
+        {
+            Logger.Information("Task operation: {Operation}, Task ID: {TaskId}, Title: {TaskTitle}, Result: {Result}",
+                operation, task.Id, task.Title, result);
+        }
+
+        public static void LogPerformance(string operation, long elapsedMilliseconds, string details = null)
+        {
+            Logger.Debug("Performance: {Operation} completed in {ElapsedMilliseconds} ms {Details}",
+                operation, elapsedMilliseconds, details ?? "");
+        }
+
+        public static void CloseAndFlush()
+        {
+            _serilogLogger?.Dispose();
+            Logger = null;
+        }
+    }
+
+
+    public class TraceManager : IDisposable
+    {
+        private readonly string _operationName;
+        private readonly Stopwatch _stopwatch;
+        private readonly string _details;
+        private bool _isDisposed;
+
+        public TraceManager(string operationName, string details = null)
+        {
+            _operationName = operationName;
+            _details = details;
+            _stopwatch = Stopwatch.StartNew();
+
+            Trace.TraceInformation($"[START] {operationName} at {DateTime.Now:HH:mm:ss.fff}");
+            LoggerManager.Logger.Debug("Trace: Starting operation {Operation} {Details}", operationName, details);
+        }
+
+        public void Dispose()
+        {
+            if (!_isDisposed)
+            {
+                _stopwatch.Stop();
+                Trace.TraceInformation($"[STOP] {_operationName} completed in {_stopwatch.ElapsedMilliseconds} ms");
+
+                LoggerManager.Logger.Debug("Trace: Operation {Operation} completed in {ElapsedMilliseconds} ms {Details}",
+                    _operationName, _stopwatch.ElapsedMilliseconds, _details);
+
+                LoggerManager.LogPerformance(_operationName, _stopwatch.ElapsedMilliseconds, _details);
+                _isDisposed = true;
+            }
+        }
+    }
+
+
+    public class TaskService
+    {
+        private readonly List<TaskItem> _tasks = new();
+        private int _nextId = 1;
+
+        public void AddTask(string title, string description = "", TaskPriority priority = TaskPriority.Medium)
+        {
+            using var trace = new TraceManager(nameof(AddTask), $"Title: {title}");
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    throw new ArgumentException("Название задачи не может быть пустым", nameof(title));
+                }
+
+                var task = new TaskItem
+                {
+                    Id = _nextId++,
+                    Title = title.Trim(),
+                    Description = description?.Trim() ?? "",
+                    Priority = priority,
+                    CreatedAt = DateTime.Now,
+                    IsCompleted = false
+                };
+
+                _tasks.Add(task);
+
+                LoggerManager.LogTaskOperation("ADD", task, "Success");
+                LoggerManager.Logger.Information("Task added: ID {TaskId}, Title {TaskTitle}", task.Id, task.Title);
+
+                Console.WriteLine($"Задача \"{task.Title}\" успешно добавлена (ID: {task.Id})");
+            }
+            catch (Exception ex)
+            {
+                LoggerManager.Logger.Error(ex, "Ошибка при добавлении задачи: {Title}", title);
+                Console.WriteLine($"Ошибка при добавлении задачи: {ex.Message}");
+                throw;
+            }
+        }
+
+        public bool RemoveTask(int id)
+        {
+            using var trace = new TraceManager(nameof(RemoveTask), $"ID: {id}");
+
+            try
+            {
+                var task = _tasks.FirstOrDefault(t => t.Id == id);
+                if (task == null)
+                {
+                    LoggerManager.Logger.Warning("Попытка удалить несуществующую задачу: ID {TaskId}", id);
+                    Console.WriteLine($"Задача с ID {id} не найдена");
+                    return false;
+                }
+
+                _tasks.Remove(task);
+                LoggerManager.LogTaskOperation("REMOVE", task, "Success");
+                LoggerManager.Logger.Information("Task removed: ID {TaskId}, Title {TaskTitle}", task.Id, task.Title);
+
+                Console.WriteLine($"Задача \"{task.Title}\" удалена");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LoggerManager.Logger.Error(ex, "Ошибка при удалении задачи ID: {TaskId}", id);
+                Console.WriteLine($"Ошибка при удалении задачи: {ex.Message}");
+                throw;
+            }
+        }
+
+        public List<TaskItem> GetAllTasks()
+        {
+            using var trace = new TraceManager(nameof(GetAllTasks), $"Total: {_tasks.Count}");
+
+            try
+            {
+                var tasksList = _tasks.OrderBy(t => t.Priority).ThenByDescending(t => t.CreatedAt).ToList();
+
+                LoggerManager.Logger.Information("Отображен список задач: {Count} задач", tasksList.Count);
+                LoggerManager.Logger.Debug("Tasks retrieved: {Count} tasks", tasksList.Count);
+
+                return tasksList;
+            }
+            catch (Exception ex)
+            {
+                LoggerManager.Logger.Error(ex, "Ошибка при получении списка задач");
+                Console.WriteLine($"Ошибка при получении списка задач: {ex.Message}");
+                throw;
+            }
+        }
+
+        public bool CompleteTask(int id)
+        {
+            using var trace = new TraceManager(nameof(CompleteTask), $"ID: {id}");
+
+            try
+            {
+                var task = _tasks.FirstOrDefault(t => t.Id == id);
+                if (task == null)
+                {
+                    LoggerManager.Logger.Warning("Попытка отметить несуществующую задачу: ID {TaskId}", id);
+                    Console.WriteLine($"Задача с ID {id} не найдена");
+                    return false;
+                }
+
+                if (task.IsCompleted)
+                {
+                    LoggerManager.Logger.Warning("Попытка повторно отметить задачу: ID {TaskId}, Title {TaskTitle}", task.Id, task.Title);
+                    Console.WriteLine($"Задача \"{task.Title}\" уже была выполнена");
+                    return false;
+                }
+
+                task.IsCompleted = true;
+                LoggerManager.LogTaskOperation("COMPLETE", task, "Success");
+                LoggerManager.Logger.Information("Task completed: ID {TaskId}, Title {TaskTitle}", task.Id, task.Title);
+
+                Console.WriteLine($"✓ Задача \"{task.Title}\" отмечена как выполненная");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LoggerManager.Logger.Error(ex, "Ошибка при отметке задачи ID: {TaskId}", id);
+                Console.WriteLine($"Ошибка при отметке задачи: {ex.Message}");
+                throw;
+            }
+        }
+
+        public void DisplayTasks()
+        {
+            using var trace = new TraceManager(nameof(DisplayTasks));
+
+            Console.WriteLine("\n" + new string('=', 60));
+            Console.WriteLine("СПИСОК ЗАДАЧ");
+            Console.WriteLine(new string('=', 60));
+
+            var tasks = GetAllTasks();
+
+            if (!tasks.Any())
+            {
+                Console.WriteLine(" Задач пока нет");
+                LoggerManager.Logger.Information("Empty task list displayed");
+                return;
+            }
+
+            foreach (var task in tasks)
+            {
+                Console.WriteLine($"  {task}");
+            }
+
+            Console.WriteLine(new string('-', 60));
+            Console.WriteLine($"Всего: {tasks.Count} | Выполнено: {tasks.Count(t => t.IsCompleted)} | Активных: {tasks.Count(t => !t.IsCompleted)}");
+            Console.WriteLine(new string('=', 60));
+        }
+    }
+
+
     public static class ExceptionHandler
     {
-        private static readonly string errorLogPath = "error_log.txt";
-
-        // Событие для оповещения о серьезных ошибках
-        public static event Action<ErrorContext> OnSeriousError;
+        private static readonly string errorLogPath = "logs/error_log.txt";
 
         static ExceptionHandler()
         {
-            // Подписываемся на событие для отправки уведомлений
-            OnSeriousError += NotifySeriousError;
+            if (!Directory.Exists("logs"))
+                Directory.CreateDirectory("logs");
         }
 
         public static void HandleException(Exception ex, string operation, ErrorLevel level = ErrorLevel.Error,
@@ -59,30 +300,22 @@ namespace TaskManagerConsoleApp
                 Operation = operation,
                 Level = level,
                 Exception = ex,
+                Timestamp = DateTime.Now,
                 AdditionalData = additionalData ?? new Dictionary<string, object>()
             };
 
-            // Логируем ошибку
             LogError(errorContext);
 
-            // Выводим в консоль
-            Console.ForegroundColor = ConsoleColor.Red;
+            Console.ForegroundColor = level == ErrorLevel.Fatal ? ConsoleColor.DarkRed : ConsoleColor.Red;
             Console.WriteLine($"\n!!! Ошибка в операции '{operation}' !!!");
             Console.WriteLine($"Сообщение: {ex.Message}");
             Console.ResetColor();
 
-            // Для фатальных ошибок показываем стек вызовов
             if (level == ErrorLevel.Fatal)
             {
                 Console.ForegroundColor = ConsoleColor.DarkRed;
                 Console.WriteLine($"Стек вызовов:\n{ex.StackTrace}");
                 Console.ResetColor();
-            }
-
-            // Вызываем событие для серьезных ошибок
-            if (level == ErrorLevel.Error || level == ErrorLevel.Fatal)
-            {
-                OnSeriousError?.Invoke(errorContext);
             }
         }
 
@@ -95,6 +328,7 @@ namespace TaskManagerConsoleApp
                 StackTrace = Environment.StackTrace,
                 Operation = operation,
                 Level = level,
+                Timestamp = DateTime.Now,
                 AdditionalData = additionalData ?? new Dictionary<string, object>()
             };
 
@@ -103,16 +337,10 @@ namespace TaskManagerConsoleApp
             Console.ForegroundColor = level == ErrorLevel.Fatal ? ConsoleColor.DarkRed : ConsoleColor.Yellow;
             Console.WriteLine($"\n!!! {message} !!!");
             Console.ResetColor();
-
-            if (level == ErrorLevel.Error || level == ErrorLevel.Fatal)
-            {
-                OnSeriousError?.Invoke(errorContext);
-            }
         }
 
         private static void LogError(ErrorContext error)
         {
-            // Логирование в файл
             string logEntry = $"[{error.Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [{error.Level}] " +
                              $"Операция: {error.Operation}\n" +
                              $"Сообщение: {error.Message}\n" +
@@ -131,359 +359,292 @@ namespace TaskManagerConsoleApp
 
             File.AppendAllText(errorLogPath, logEntry);
 
-            // Логирование через Serilog
             switch (error.Level)
             {
                 case ErrorLevel.Error:
-                    Log.Error(error.Exception, "Ошибка в операции {Operation}: {Message}", error.Operation, error.Message);
+                    LoggerManager.Logger.Error(error.Exception, "Ошибка в операции {Operation}: {Message}", error.Operation, error.Message);
                     break;
                 case ErrorLevel.Fatal:
-                    Log.Fatal(error.Exception, "Фатальная ошибка в операции {Operation}: {Message}", error.Operation, error.Message);
+                    LoggerManager.Logger.Fatal(error.Exception, "Фатальная ошибка в операции {Operation}: {Message}", error.Operation, error.Message);
                     break;
                 case ErrorLevel.Warning:
-                    Log.Warning("Предупреждение в операции {Operation}: {Message}", error.Operation, error.Message);
+                    LoggerManager.Logger.Warning("Предупреждение в операции {Operation}: {Message}", error.Operation, error.Message);
                     break;
                 default:
-                    Log.Information("Информация об ошибке в операции {Operation}: {Message}", error.Operation, error.Message);
+                    LoggerManager.Logger.Information("Информация об ошибке в операции {Operation}: {Message}", error.Operation, error.Message);
                     break;
             }
         }
-
-        private static void NotifySeriousError(ErrorContext error)
-        {
-            // Оповещение в консоль
-            Console.ForegroundColor = ConsoleColor.DarkRed;
-            Console.WriteLine($"\n!!! КРИТИЧЕСКАЯ ОШИБКА !!! Уровень: {error.Level}");
-            Console.WriteLine($"Пожалуйста, проверьте лог-файл: {errorLogPath}");
-            Console.ResetColor();
-
-            // Отправка в Sentry (закомментировано, требует настройки)
-            // SentrySdk.CaptureException(error.Exception);
-
-            // Отправка email (пример)
-            // SendEmailNotification(error);
-
-            // В реальном проекте здесь можно добавить отправку в Application Insights
-            // TelemetryClient.TrackException(error.Exception);
-        }
-
-        // Пример отправки email уведомления
-        private static void SendEmailNotification(ErrorContext error)
-        {
-            // Здесь код для отправки email
-            // Это заглушка для примера
-            Log.Information("Отправлено email-уведомление об ошибке: {Message}", error.Message);
-        }
     }
 
-    public class TaskItem
+    public enum ErrorLevel
     {
-        public int Id { get; set; }
-        public string Description { get; set; }
-        public DateTime CreatedAt { get; set; }
-        public bool IsCompleted { get; set; }
+        Info,
+        Warning,
+        Error,
+        Fatal,
+        Debug
+    }
 
-        public override string ToString()
+    public class ErrorContext
+    {
+        public string Message { get; set; }
+        public string StackTrace { get; set; }
+        public string Operation { get; set; }
+        public ErrorLevel Level { get; set; }
+        public DateTime Timestamp { get; set; }
+        public Exception Exception { get; set; }
+        public Dictionary<string, object> AdditionalData { get; set; }
+
+        public ErrorContext()
         {
-            string status = IsCompleted ? "[X]" : "[ ]";
-            return $"{Id}. {status} {Description} (Создано: {CreatedAt:dd.MM.yyyy HH:mm})";
+            AdditionalData = new Dictionary<string, object>();
         }
     }
+
 
     class Program
     {
-        private static List<TaskItem> tasks = new List<TaskItem>();
-        private static int nextId = 1;
-        private static readonly string logFilePath = "app_log.txt";
+        private static TaskService _taskService;
+        private static bool _exitRequested = false;
 
         static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+            {
+                var ex = (Exception)e.ExceptionObject;
+                if (LoggerManager.Logger != null)
+                    LoggerManager.Logger.Fatal(ex, "НЕОБРАБОТАННОЕ ИСКЛЮЧЕНИЕ - Приложение будет закрыто");
+
+                Console.WriteLine("\n!!! КРИТИЧЕСКАЯ ОШИБКА !!!");
+                Console.WriteLine($"Пожалуйста, проверьте лог-файлы в папке 'logs'");
+                Console.WriteLine($"Ошибка: {ex.Message}");
+
+                if (Debugger.IsAttached)
+                {
+                    Console.WriteLine($"Стек вызовов:\n{ex.StackTrace}");
+                }
+            };
+
             try
             {
-                // Настройка Serilog
-                Log.Logger = new LoggerConfiguration()
-                    .MinimumLevel.Debug()
-                    .WriteTo.Console()
-                    .WriteTo.File("logs\\myapp-.log",
-                        rollingInterval: RollingInterval.Day,
-                        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
-                    .CreateLogger();
-
-                Log.Debug("Приложение запущено.");
-
-                // Централизованная обработка необработанных исключений
-                AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-                {
-                    var ex = (Exception)e.ExceptionObject;
-                    ExceptionHandler.HandleException(ex, "UnhandledException", ErrorLevel.Fatal,
-                        new Dictionary<string, object> { { "IsTerminating", e.IsTerminating } });
-                };
-
-                // Обработка исключений в потоках
-                System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
-                {
-                    ExceptionHandler.HandleException(e.Exception, "UnobservedTaskException", ErrorLevel.Error);
-                    e.SetObserved();
-                };
-
-                bool exit = false;
-                while (!exit)
-                {
-                    try
-                    {
-                        PrintMenu();
-                        string input = Console.ReadLine();
-                        Log.Information($"Пользователь ввел команду: {input}");
-
-                        switch (input)
-                        {
-                            case "1":
-                                CreateTask();
-                                break;
-                            case "2":
-                                DeleteTask();
-                                break;
-                            case "3":
-                                ViewTasks();
-                                break;
-                            case "4":
-                                MarkTaskAsCompleted();
-                                break;
-                            case "5":
-                                exit = true;
-                                Log.Information("Пользователь завершил работу приложения.");
-                                Console.WriteLine("До свидания!");
-                                break;
-                            default:
-                                ExceptionHandler.HandleNonExceptionError(
-                                    $"Неверная команда: {input}",
-                                    "MainMenu",
-                                    ErrorLevel.Warning);
-                                break;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        ExceptionHandler.HandleException(ex, "MainLoop", ErrorLevel.Error);
-                    }
-                }
+                InitializeApplication();
+                RunMainLoop();
             }
             catch (Exception ex)
             {
-                ExceptionHandler.HandleException(ex, "ApplicationStartup", ErrorLevel.Fatal);
+                if (LoggerManager.Logger != null)
+                    LoggerManager.Logger.Fatal(ex, "Фатальная ошибка при запуске приложения");
+
+                Console.WriteLine($"\n!!! КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАПУСКЕ: {ex.Message} !!!");
+                Console.WriteLine("Пожалуйста, проверьте конфигурацию и повторите попытку.");
             }
             finally
             {
-                Log.CloseAndFlush();
+                ShutdownApplication();
             }
         }
 
-        static void PrintMenu()
+        private static void InitializeApplication()
         {
-            Console.WriteLine("\n--- Менеджер задач ---");
-            Console.WriteLine("1. Создать задачу");
+            LoggerManager.Logger.Information("=== ЗАПУСК ПРИЛОЖЕНИЯ TaskManager ===");
+            LoggerManager.Logger.Information("Операционная система: {OS}", Environment.OSVersion);
+            LoggerManager.Logger.Information("Версия .NET: {Version}", Environment.Version);
+
+            Trace.Listeners.Add(new ConsoleTraceListener());
+            Trace.AutoFlush = true;
+            Trace.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Application started");
+
+            _taskService = new TaskService();
+
+            LoggerManager.Logger.Information("TaskService инициализирован");
+            Console.WriteLine("Добро пожаловать в TaskManager!");
+            Console.WriteLine("=".PadRight(50, '='));
+        }
+
+        private static void RunMainLoop()
+        {
+            while (!_exitRequested)
+            {
+                try
+                {
+                    DisplayMenu();
+                    var input = Console.ReadLine();
+
+                    LoggerManager.Logger.Information("Пользователь ввел команду: {Command}", input);
+
+                    ProcessCommand(input);
+                }
+                catch (Exception ex)
+                {
+                    ExceptionHandler.HandleException(ex, "MainLoop", ErrorLevel.Error);
+                    Console.WriteLine("\n!!! Ошибка при обработке команды !!!");
+                    Console.WriteLine("Проверьте корректность ввода и попробуйте снова.");
+                    Console.WriteLine("Подробности в лог-файлах.\n");
+                }
+            }
+        }
+
+        private static void DisplayMenu()
+        {
+            Console.WriteLine("\n" + new string('-', 50));
+            Console.WriteLine("ГЛАВНОЕ МЕНЮ");
+            Console.WriteLine(new string('-', 50));
+            Console.WriteLine("1. Добавить задачу");
             Console.WriteLine("2. Удалить задачу");
             Console.WriteLine("3. Показать все задачи");
             Console.WriteLine("4. Отметить задачу как выполненную");
             Console.WriteLine("5. Выход");
-            Console.Write("Выберите действие: ");
+            Console.WriteLine(new string('-', 50));
+            Console.Write("Ваш выбор: ");
         }
 
-        static void CreateTask()
+        private static void ProcessCommand(string input)
         {
+            using var trace = new TraceManager(nameof(ProcessCommand), $"Command: {input}");
+
+            switch (input)
+            {
+                case "1":
+                    AddTaskFlow();
+                    break;
+                case "2":
+                    RemoveTaskFlow();
+                    break;
+                case "3":
+                    _taskService.DisplayTasks();
+                    break;
+                case "4":
+                    CompleteTaskFlow();
+                    break;
+                case "5":
+                    _exitRequested = true;
+                    LoggerManager.Logger.Information("Пользователь инициировал завершение работы");
+                    Console.WriteLine("\nДо свидания!");
+                    break;
+                default:
+                    ExceptionHandler.HandleNonExceptionError(
+                        $"Неверная команда: {input}",
+                        "ProcessCommand",
+                        ErrorLevel.Warning);
+                    Console.WriteLine("Неверная команда. Пожалуйста, выберите 1-5.");
+                    break;
+            }
+        }
+
+        private static void AddTaskFlow()
+        {
+            using var trace = new TraceManager(nameof(AddTaskFlow));
+
             try
             {
-                var stopwatch = Stopwatch.StartNew();
-                Log.Information("Start Create Task");
+                Console.Write("Название задачи: ");
+                var title = Console.ReadLine();
 
-                Console.Write("Введите описание задачи: ");
-                string description = Console.ReadLine();
+                Console.Write("Описание (опционально, Enter для пропуска): ");
+                var description = Console.ReadLine();
 
-                if (string.IsNullOrWhiteSpace(description))
+                Console.Write("Приоритет (0-Low, 1-Medium, 2-High, 3-Critical) [1]: ");
+                var priorityInput = Console.ReadLine();
+                var priority = priorityInput switch
                 {
-                    ExceptionHandler.HandleNonExceptionError(
-                        "Описание задачи не может быть пустым",
-                        "CreateTask",
-                        ErrorLevel.Warning,
-                        new Dictionary<string, object> { { "Description", description } });
-                    return;
-                }
-
-                var newTask = new TaskItem
-                {
-                    Id = nextId++,
-                    Description = description,
-                    CreatedAt = DateTime.Now,
-                    IsCompleted = false
+                    "0" => TaskPriority.Low,
+                    "2" => TaskPriority.High,
+                    "3" => TaskPriority.Critical,
+                    _ => TaskPriority.Medium
                 };
 
-                tasks.Add(newTask);
-
-                Console.WriteLine($"Задача '{description}' успешно добавлена (ID: {newTask.Id})!");
-                Log.Information($"Задача успешно создана с ID: {newTask.Id}");
-
-                stopwatch.Stop();
-                Log.Information($"Close Create Task | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | ID: {newTask.Id}");
+                _taskService.AddTask(title, description, priority);
+            }
+            catch (ArgumentException ex)
+            {
+                ExceptionHandler.HandleException(ex, "AddTaskFlow", ErrorLevel.Warning);
+                Console.WriteLine($"{ex.Message}");
             }
             catch (Exception ex)
             {
-                ExceptionHandler.HandleException(ex, "CreateTask", ErrorLevel.Error);
+                ExceptionHandler.HandleException(ex, "AddTaskFlow", ErrorLevel.Error);
+                Console.WriteLine("Произошла ошибка при добавлении задачи. Проверьте логи.");
             }
         }
 
-        static void DeleteTask()
+        private static void RemoveTaskFlow()
         {
+            using var trace = new TraceManager(nameof(RemoveTaskFlow));
+
             try
             {
-                var stopwatch = Stopwatch.StartNew();
-                Log.Information("Start Delete Task");
+                _taskService.DisplayTasks();
 
-                if (tasks.Count == 0)
+                if (_taskService.GetAllTasks().Count > 0)
                 {
-                    ExceptionHandler.HandleNonExceptionError(
-                        "Нет задач для удаления",
-                        "DeleteTask",
-                        ErrorLevel.Warning);
-                    return;
-                }
-
-                ViewTasks();
-
-                Console.Write("Введите ID задачи для удаления: ");
-                if (!int.TryParse(Console.ReadLine(), out int id))
-                {
-                    ExceptionHandler.HandleNonExceptionError(
-                        "Некорректный ID задачи",
-                        "DeleteTask",
-                        ErrorLevel.Warning,
-                        new Dictionary<string, object> { { "Input", id.ToString() } });
-                    return;
-                }
-
-                Log.Information($"Попытка удалить задачу с ID: {id}");
-
-                var taskToDelete = tasks.FirstOrDefault(t => t.Id == id);
-                if (taskToDelete != null)
-                {
-                    tasks.Remove(taskToDelete);
-                    Console.WriteLine($"Задача '{taskToDelete.Description}' удалена.");
-                    Log.Information($"Задача с ID {id} успешно удалена.");
-                }
-                else
-                {
-                    ExceptionHandler.HandleNonExceptionError(
-                        $"Задача с ID {id} не найдена",
-                        "DeleteTask",
-                        ErrorLevel.Error,
-                        new Dictionary<string, object> { { "TaskId", id } });
-                }
-
-                stopwatch.Stop();
-                Log.Information($"Close Delete Task | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
-            }
-            catch (Exception ex)
-            {
-                ExceptionHandler.HandleException(ex, "DeleteTask", ErrorLevel.Error);
-            }
-        }
-
-        static void ViewTasks()
-        {
-            try
-            {
-                var stopwatch = Stopwatch.StartNew();
-                Log.Information("Start View Task");
-
-                Console.WriteLine("\n--- Список задач ---");
-
-                if (tasks.Count == 0)
-                {
-                    Console.WriteLine("Задач пока нет.");
-                    Log.Information("Просмотр списка задач: список пуст.");
-                }
-                else
-                {
-                    foreach (var task in tasks)
+                    Console.Write("\nВведите ID задачи для удаления: ");
+                    if (int.TryParse(Console.ReadLine(), out int id))
                     {
-                        Console.WriteLine(task.ToString());
-                    }
-                    Log.Information($"Просмотр списка задач. Всего задач: {tasks.Count}");
-                }
-
-                stopwatch.Stop();
-                Log.Information($"Close View Task | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс | Всего задач: {tasks.Count}");
-            }
-            catch (Exception ex)
-            {
-                ExceptionHandler.HandleException(ex, "ViewTasks", ErrorLevel.Error);
-            }
-        }
-
-        static void MarkTaskAsCompleted()
-        {
-            try
-            {
-                var stopwatch = Stopwatch.StartNew();
-                Log.Information("Start Mark Task As Completed");
-
-                if (tasks.Count == 0)
-                {
-                    ExceptionHandler.HandleNonExceptionError(
-                        "Нет задач для отметки",
-                        "MarkTaskAsCompleted",
-                        ErrorLevel.Warning);
-                    return;
-                }
-
-                ViewTasks();
-
-                Console.Write("Введите ID задачи для отметки как выполненной: ");
-                if (!int.TryParse(Console.ReadLine(), out int id))
-                {
-                    ExceptionHandler.HandleNonExceptionError(
-                        "Некорректный ID задачи",
-                        "MarkTaskAsCompleted",
-                        ErrorLevel.Warning,
-                        new Dictionary<string, object> { { "Input", id.ToString() } });
-                    return;
-                }
-
-                Log.Information($"Попытка отметить задачу с ID {id} как выполненную.");
-
-                var task = tasks.FirstOrDefault(t => t.Id == id);
-                if (task != null)
-                {
-                    if (!task.IsCompleted)
-                    {
-                        task.IsCompleted = true;
-                        Console.WriteLine($"Задача '{task.Description}' отмечена как выполненная!");
-                        Log.Information($"Задача с ID {id} отмечена как выполненная.");
+                        _taskService.RemoveTask(id);
                     }
                     else
                     {
                         ExceptionHandler.HandleNonExceptionError(
-                            $"Задача с ID {id} уже была выполнена ранее",
-                            "MarkTaskAsCompleted",
-                            ErrorLevel.Warning,
-                            new Dictionary<string, object> { { "TaskId", id } });
+                            $"Введен некорректный ID",
+                            "RemoveTaskFlow",
+                            ErrorLevel.Warning);
+                        Console.WriteLine("Пожалуйста, введите корректный числовой ID.");
                     }
                 }
-                else
-                {
-                    ExceptionHandler.HandleNonExceptionError(
-                        $"Задача с ID {id} не найдена",
-                        "MarkTaskAsCompleted",
-                        ErrorLevel.Error,
-                        new Dictionary<string, object> { { "TaskId", id } });
-                }
-
-                stopwatch.Stop();
-                Log.Information($"Close Mark Task As Completed | ВРЕМЯ: {stopwatch.ElapsedMilliseconds} мс");
             }
             catch (Exception ex)
             {
-                ExceptionHandler.HandleException(ex, "MarkTaskAsCompleted", ErrorLevel.Error);
+                ExceptionHandler.HandleException(ex, "RemoveTaskFlow", ErrorLevel.Error);
+                Console.WriteLine("Произошла ошибка при удалении задачи. Проверьте логи.");
             }
+        }
+
+        private static void CompleteTaskFlow()
+        {
+            using var trace = new TraceManager(nameof(CompleteTaskFlow));
+
+            try
+            {
+                _taskService.DisplayTasks();
+                if (_taskService.GetAllTasks().Count > 0)
+                {
+                    Console.Write("\nВведите ID задачи для отметки как выполненной: ");
+                    if (int.TryParse(Console.ReadLine(), out int id))
+                    {
+                        _taskService.CompleteTask(id);
+                    }
+                    else
+                    {
+                        ExceptionHandler.HandleNonExceptionError(
+                            $"Введен некорректный ID",
+                            "CompleteTaskFlow",
+                            ErrorLevel.Warning);
+                        Console.WriteLine("Пожалуйста, введите корректный числовой ID.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ExceptionHandler.HandleException(ex, "CompleteTaskFlow", ErrorLevel.Error);
+                Console.WriteLine("Произошла ошибка при отметке задачи. Проверьте логи.");
+            }
+        }
+
+        private static void ShutdownApplication()
+        {
+            if (LoggerManager.Logger != null)
+            {
+                LoggerManager.Logger.Information("=== ЗАВЕРШЕНИЕ ПРИЛОЖЕНИЯ TaskManager ===");
+                Trace.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Application shutdown");
+                Trace.Flush();
+
+                LoggerManager.CloseAndFlush();
+            }
+
+            Console.WriteLine("\nЛог-файлы сохранены в папке 'logs'");
+            Console.WriteLine("Нажмите любую клавишу для выхода...");
+            Console.ReadKey();
         }
     }
 }
